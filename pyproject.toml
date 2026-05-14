@@ -1,0 +1,23 @@
+[project]
+name = "dizzy-like"
+version = "0.1.0"
+description = "Onion service crawler and analyzer — Python implementation of Boshmaf et al. (2023)"
+requires-python = ">=3.10"
+dependencies = [
+    "requests[socks]>=2.28",
+    "beautifulsoup4>=4.12",
+    "scikit-learn>=1.3",
+    "networkx>=3.1",
+    "numpy>=1.24",
+    "lxml",
+]
+
+[project.scripts]
+dizzy = "dizzy_like.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dizzy_like"]
