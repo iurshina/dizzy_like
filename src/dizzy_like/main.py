@@ -14,7 +14,6 @@ import argparse
 import hashlib
 import json
 import sys
-import time
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlparse
@@ -26,7 +25,7 @@ from .crawler import OnionCrawler
 from .crypto import WalletClusterer, extract_addresses
 from .features import extract_features
 from .graph import OnionWebGraph
-from .seeder import INDEXER_URLS, collect_seeds
+from .seeder import collect_seeds
 from .storage import DizzyStorage
 
 
@@ -51,6 +50,7 @@ def cmd_seed(args: argparse.Namespace) -> None:
         tor_proxy=args.tor_proxy,
         timeout=args.timeout,
         delay=args.delay,
+        use_ahmia=not args.no_ahmia,
         use_indexers=not args.no_indexers,
         use_torch=not args.no_torch,
         extra_indexers=extra_indexers,
@@ -364,8 +364,9 @@ def main() -> None:
     # seed
     p = sub.add_parser("seed", help="Collect seed domains from onion indexers and Torch")
     p.add_argument("--output", default="seeds.txt", help="Output file (default: seeds.txt)")
-    p.add_argument("--no-indexers", action="store_true", help="Skip onion indexer scraping")
-    p.add_argument("--no-torch", action="store_true", help="Skip Torch search queries")
+    p.add_argument("--no-ahmia", action="store_true", help="Skip Ahmia sitemap (clearnet)")
+    p.add_argument("--no-indexers", action="store_true", help="Skip onion indexer scraping (Tor)")
+    p.add_argument("--no-torch", action="store_true", help="Skip Torch search queries (Tor)")
     p.add_argument("--indexers", default="", help="Comma-separated extra indexer URLs")
     p.add_argument("--words", default="", help="Path to extra word list file (one word per line)")
     p.add_argument("--max-queries", type=int, default=30, help="Max Torch queries (default: 30)")

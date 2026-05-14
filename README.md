@@ -43,16 +43,22 @@ By default the crawler connects through `socks5h://127.0.0.1:9150` (Tor Browser)
 
 ### Step 0: Collect seeds
 
-The paper (§3.1.1) seeds the crawler from two sources: **onion indexers** (like OnionDir) and **Torch**, a darkweb search engine, queried with single words and 2-word combinations from language dictionaries. The `seed` command automates this:
+The `seed` command collects from three sources:
+
+| Source | Tor needed? | Coverage |
+|--------|------------|----------|
+| **Ahmia** sitemap (`ahmia.fi/sitemap.xml`) | No | ~1,000+ live v3 domains, blacklist-filtered |
+| **Onion indexers** (OnionDir, dark.fail) | Yes | Hundreds of domains |
+| **Torch** search queries (word-list driven) | Yes | Variable |
 
 ```bash
-# Collect from both OnionDir and Torch (requires Tor)
+# All three sources (recommended)
 uv run dizzy seed
 
-# Indexers only (faster, no search queries)
-uv run dizzy seed --no-torch
+# Ahmia only — no Tor needed, good starting point
+uv run dizzy seed --no-indexers --no-torch
 
-# Provide your own extra word list
+# Add your own word list for Torch queries
 uv run dizzy seed --words wordlist.txt --max-queries 50
 
 # Custom output path

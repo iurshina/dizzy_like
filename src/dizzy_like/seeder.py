@@ -1,11 +1,9 @@
 """Seed collection (§3.1.1 — State Orchestration).
 
-Two sources, as described in the paper:
-  1. Onion indexers  — parse known index pages for listed .onion domains
-  2. Torch search    — query the Tor search engine with dictionary word-pairs
-                       and collect result domains
-
-Both use the Tor proxy so we never touch a .onion directly from clearnet.
+Three sources:
+  1. Ahmia sitemap   — clearnet; no Tor needed; largest public onion index (~1k+ live v3)
+  2. Onion indexers  — OnionDir, Torch homepage, dark.fail (Tor required for .onion ones)
+  3. Torch search    — query Tor search engine with dictionary word-pairs (Tor required)
 """
 from __future__ import annotations
 
@@ -14,11 +12,16 @@ import re
 import time
 from typing import Iterable, Iterator, List, Set
 from urllib.parse import urljoin, urlparse
+from xml.etree import ElementTree
 
 import requests
 from bs4 import BeautifulSoup
 
 _ONION_RE = re.compile(r'\b([a-z2-7]{56}\.onion|[a-z2-7]{16}\.onion)\b', re.I)
+
+# Ahmia public sitemap — clearnet, no Tor needed
+_AHMIA_SITEMAP = "https://ahmia.fi/sitemap.xml"
+_AHMIA_BLACKLIST = "https://ahmia.fi/blacklist/"  # domains flagged as CSAM — always skip
 
 # ── Known public onion indexers (from paper footnote 2 + well-known mirrors) ──
 INDEXER_URLS = [
@@ -53,6 +56,13 @@ _SEED_WORDS = [
 ]
 
 
+def _clear_session(user_agent: str, timeout: int) -> requests.Session:
+    s = requests.Session()
+    s.headers["User-Agent"] = user_agent
+    s.timeout = timeout
+    return s
+
+
 def _tor_session(proxy: str, user_agent: str, timeout: int) -> requests.Session:
     s = requests.Session()
     s.proxies = {"http": proxy, "https": proxy}
@@ -72,6 +82,46 @@ def _fetch_text(url: str, session: requests.Session, timeout: int) -> str:
     except Exception as exc:
         print(f"  [!] {url}: {exc}")
         return ""
+
+
+def collect_from_ahmia(user_agent: str, timeout: int) -> Set[str]:
+    """
+    Fetch Ahmia's public sitemap (clearnet, no Tor needed) and return all
+    listed .onion domains. Also fetches the blacklist and removes flagged domains.
+    Ahmia is the largest researcher-friendly onion index with ~1k+ live v3 domains.
+    """
+    session = _clear_session(user_agent, timeout)
+    found: Set[str] = set()
+
+    # Fetch blacklist first so we never return flagged domains
+    blacklisted: Set[str] = set()
+    try:
+        resp = session.get(_AHMIA_BLACKLIST, timeout=timeout)
+        blacklisted = _extract_onions(resp.text)
+        print(f"  [ahmia] loaded {len(blacklisted)} blacklisted domains")
+    except Exception as exc:
+        print(f"  [ahmia] could not fetch blacklist: {exc}")
+
+    # Fetch sitemap
+    try:
+        resp = session.get(_AHMIA_SITEMAP, timeout=timeout)
+        resp.raise_for_status()
+        # Sitemap is XML: <urlset><url><loc>http://xyz.onion/</loc></url>...
+        root = ElementTree.fromstring(resp.text)
+        ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        locs = [el.text for el in root.findall(".//sm:loc", ns) if el.text]
+        if not locs:
+            # Fallback: plain regex on the raw text
+            locs = list(_extract_onions(resp.text))
+        for loc in locs:
+            batch = _extract_onions(loc)
+            found.update(batch)
+    except Exception as exc:
+        print(f"  [ahmia] sitemap fetch failed: {exc}")
+
+    found -= blacklisted
+    print(f"  [ahmia] {len(found)} domains after blacklist filter")
+    return found
 
 
 def collect_from_indexers(
@@ -143,6 +193,7 @@ def collect_seeds(
     tor_proxy: str = "socks5h://127.0.0.1:9150",
     timeout: int = 45,
     delay: float = 2.0,
+    use_ahmia: bool = True,
     use_indexers: bool = True,
     use_torch: bool = True,
     extra_indexers: List[str] | None = None,
@@ -151,26 +202,37 @@ def collect_seeds(
     output: str = "seeds.txt",
 ) -> List[str]:
     """
-    Full seed collection pipeline from §3.1.1.
+    Full seed collection pipeline from §3.1.1 + Ahmia.
     Returns sorted list of discovered .onion domains and writes them to output.
+
+    Source coverage (approximate):
+      Ahmia sitemap:  ~1,000+ live v3 domains, no Tor needed, blacklist-filtered
+      Onion indexers: hundreds of domains via OnionDir / dark.fail (Tor needed)
+      Torch queries:  variable, depends on word list (Tor needed)
     """
     user_agent = "Dizzy Research Crawler (passive, seed collection)"
-    session = _tor_session(tor_proxy, user_agent, timeout)
+    tor_session = _tor_session(tor_proxy, user_agent, timeout)
 
     all_seeds: Set[str] = set()
 
+    if use_ahmia:
+        print("[*] Collecting from Ahmia sitemap (clearnet)...")
+        found = collect_from_ahmia(user_agent, timeout)
+        print(f"[+] Ahmia yielded {len(found)} unique domains")
+        all_seeds.update(found)
+
     if use_indexers:
         indexers = INDEXER_URLS + (extra_indexers or [])
-        print(f"[*] Collecting from {len(indexers)} indexer(s)...")
-        found = collect_from_indexers(indexers, session, timeout, delay)
+        print(f"[*] Collecting from {len(indexers)} onion indexer(s) (Tor)...")
+        found = collect_from_indexers(indexers, tor_session, timeout, delay)
         print(f"[+] Indexers yielded {len(found)} unique domains")
         all_seeds.update(found)
 
     if use_torch:
         words = _SEED_WORDS + (extra_words or [])
         queries = _word_queries(words)
-        print(f"[*] Querying Torch (up to {max_torch_queries} queries)...")
-        found = collect_from_torch(queries, session, timeout, delay, max_torch_queries)
+        print(f"[*] Querying Torch (up to {max_torch_queries} queries, Tor)...")
+        found = collect_from_torch(queries, tor_session, timeout, delay, max_torch_queries)
         print(f"[+] Torch yielded {len(found)} unique domains")
         all_seeds.update(found)
 
